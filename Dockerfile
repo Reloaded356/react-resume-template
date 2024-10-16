@@ -1,52 +1,43 @@
-FROM ubuntu:22.04 as base
+# Build Stage
+FROM node:latest as build-stage
 
-### Stage 1 - add/remove packages ###
+WORKDIR /app
 
-# Ensure scripts are available for use in next command
-COPY ./container/root/scripts/* /scripts/
-COPY ./container/root/usr/local/bin/* /usr/local/bin/
+# Copy package.json and package-lock.json to the working directory
+COPY package*.json ./
 
-# - Symlink variant-specific scripts to default location
-# - Upgrade base security packages, then clean packaging leftover
-# - Add S6 for zombie reaping, boot-time coordination, signal transformation/distribution: @see https://github.com/just-containers/s6-overlay#known-issues-and-workarounds
-# - Add goss for local, serverspec-like testing
-RUN /bin/bash -e /scripts/ubuntu_apt_config.sh && \
-    /bin/bash -e /scripts/ubuntu_apt_cleanmode.sh && \
-    ln -s /scripts/clean_ubuntu.sh /clean.sh && \
-    ln -s /scripts/security_updates_ubuntu.sh /security_updates.sh && \
-    echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections && \
-    /bin/bash -e /security_updates.sh && \
-    apt-get install -yqq \
-      curl \
-      gpg \
-      apt-transport-https \
-    && \
-    /bin/bash -e /scripts/install_s6.sh && \
-    /bin/bash -e /scripts/install_goss.sh && \
-    apt-get remove --purge -yq \
-        curl \
-        gpg \
-    && \
-    /bin/bash -e /clean.sh
+# Install dependencies
+RUN npm install
 
-# Overlay the root filesystem from this repo
-COPY ./container/root /
+# Copy the rest of the application files to the working directory
+COPY . .
 
+# Build the React application
+RUN npm run build
 
-### Stage 2 --- collapse layers ###
+# Production Stage
+FROM nginx:latest
 
-FROM scratch
-COPY --from=base / .
+# Copy the NGINX configuration file
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Use in multi-phase builds, when an init process requests for the container to gracefully exit, so that it may be committed
-# Used with alternative CMD (worker.sh), leverages supervisor to maintain long-running processes
-ENV SIGNAL_BUILD_STOP=99 \
-    S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
-    S6_KILL_FINISH_MAXTIME=5000 \
-    S6_KILL_GRACETIME=3000
+# Copy the build artifacts from the build stage to NGINX web server
+COPY --from=build-stage /app/build/ /usr/share/nginx/html
 
-RUN goss -g goss.base.yaml validate
+# We need to make sure not to run the container as a non root user
+# for better security
+WORKDIR /app
+RUN chown -R nginx:nginx /app && chmod -R 755 /app && \
+        chown -R nginx:nginx /var/cache/nginx && \
+        chown -R nginx:nginx /var/log/nginx && \
+        chown -R nginx:nginx /etc/nginx/conf.d
+RUN touch /var/run/nginx.pid && \
+        chown -R nginx:nginx /var/run/nginx.pid
 
-# NOTE: intentionally NOT using s6 init as the entrypoint
-# This would prevent container debugging if any of those service crash
-CMD ["/bin/bash", "/run.sh"]
+USER nginx
+
+# Expose port 80 for the NGINX server
+EXPOSE 80
+
+# Command to start NGINX when the container is run
+CMD ["nginx", "-g", "daemon off;"]
