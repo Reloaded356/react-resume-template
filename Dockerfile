@@ -1,5 +1,5 @@
 # Build Stage
-FROM node:latest as build-stage
+FROM node:20.18.0 as build-stage
 
 WORKDIR /app
 
@@ -7,13 +7,13 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm install
+RUN yarn install
 
 # Copy the rest of the application files to the working directory
 COPY . .
 
 # Build the React application
-RUN npm run build
+RUN yarn run build
 
 # Production Stage
 FROM nginx:latest
@@ -40,4 +40,4 @@ USER nginx
 EXPOSE 80
 
 # Command to start NGINX when the container is run
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["nginx", "-g", "daemon lsoff;"]
